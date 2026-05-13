@@ -1,0 +1,417 @@
+{
+  "name": "AI-Powered Building Code Lookup",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Building Code Finder (AI Agent + Web Search)\n\n**Flow**\n1. User submits Location + Code Type via n8n Form\n2. Input is validated (length, must contain a space OR digits, allowed code types)\n3. GPT-4o-mini resolves \"City, State\" from the raw location string; regex-checked before use\n4. The **AI Agent** (GPT-4o) plans research and calls the **Serper web_search tool** up to 5 times\n5. A **Structured Output Parser** enforces the JSON response schema\n6. **Dedup & Filter Sources** drops duplicate URLs and removes non-allowed domains\n7. Code node renders defensive HTML\n8. Form completion page displays results\n\n**Setup required before running**\n- OpenAI credential (already configured: `OpenAi account`)\n- Create an **HTTP Header Auth** credential named `Serper API`:\n  - Header name: `X-API-KEY`\n  - Header value: your Serper key\n- Open the `Web Search Tool (Serper)` node and select the new credential.\n\n**Robustness settings (this revision)**\n- Retries + timeouts on every network-bound node (OpenAI x2, Serper).\n- `returnIntermediateSteps: true` on the agent so tool-call traces flow downstream for debugging.\n- Domain allowlist + URL dedup enforced in code after the agent — prompt-only rules are not reliable on their own.\n\n**Why this architecture**\n- The Agent node supports OpenAI function calling — a plain completion node would leave the tool uninvoked.\n- The output parser guarantees the downstream nodes always receive the expected fields.\n- Geocoding is a cheap GPT-4o-mini call; the expensive GPT-4o agent only runs the research step.",
+        "height": 820,
+        "width": 380,
+        "color": 5
+      },
+      "id": "e68f5544-1c88-40ae-981e-88fe1f3fab39",
+      "name": "Workflow Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "path": "building-code-finder",
+        "formTitle": "Building Code Finder",
+        "formDescription": "Find official US building codes with AI-verified sources for any city or address. This typically takes 20–45 seconds.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Location",
+              "placeholder": "City + State, ZIP, or full address (e.g., Renton WA, 98168, 4414 S 144th St)",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Code Type",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "Building Code" },
+                  { "option": "Residential Code" },
+                  { "option": "Fire Code" },
+                  { "option": "Mechanical Code" },
+                  { "option": "Plumbing Code" },
+                  { "option": "Electrical Code" }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "9f2ce9d2-35b5-4425-8c95-e3d5fbe05ae6",
+      "name": "User Input Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [
+        560,
+        420
+      ],
+      "webhookId": "building-code-finder"
+    },
+    {
+      "parameters": {
+        "jsCode": "const form = $input.first().json;\n\nconst allowedCodeTypes = [\n  'Building Code',\n  'Residential Code',\n  'Fire Code',\n  'Mechanical Code',\n  'Plumbing Code',\n  'Electrical Code'\n];\n\nconst location = (form['Location'] || '').toString().trim();\nconst codeType = (form['Code Type'] || '').toString().trim();\n\nif (location.length < 3 || location.length > 200) {\n  throw new Error('Invalid location: must be 3-200 characters.');\n}\n\n// A useful US location has either a space (e.g., \"Renton WA\") or digits (ZIP or street number).\n// This rejects useless inputs like a bare state code (\"WA\") which would burn a GPT-4o agent run.\nconst hasSpace = /\\s/.test(location);\nconst hasDigits = /\\d/.test(location);\nif (!hasSpace && !hasDigits) {\n  throw new Error('Invalid location: please provide a city + state, ZIP code, or full address (e.g., \"Renton WA\", \"98168\").');\n}\n\nif (!allowedCodeTypes.includes(codeType)) {\n  throw new Error(`Invalid code type. Must be one of: ${allowedCodeTypes.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    location,\n    codeType,\n    geocode_prompt: `Identify the US city and state for the location \"${location}\". Respond with exactly \"City, Full State Name\" (e.g., \"Renton, Washington\"). If the location is ambiguous, not in the United States, or you cannot determine it, respond with exactly \"UNKNOWN\". Do not add explanations or any other text.`\n  }\n}];\n"
+      },
+      "id": "a1b2c3d4-1111-2222-3333-444455556666",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.geocode_prompt }}",
+              "role": "user"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "f4bdef37-87ac-4fbe-af41-55c2e969abd5",
+      "name": "Resolve City & State",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1000,
+        420
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiResponse = $input.first().json;\nconst validated = $('Validate Input').item.json;\n\nconst raw = (aiResponse?.message?.content || '').toString().trim();\n\n// Require the model to return exactly \"City, Full State\" (letters, spaces, dots, apostrophes, hyphens).\n// If the format is off, fall back to the raw location rather than passing malformed data to the agent.\nconst formatRegex = /^[A-Za-z .'\\-]+,\\s*[A-Za-z ]+$/;\nconst isValid = raw && raw.toUpperCase() !== 'UNKNOWN' && formatRegex.test(raw);\nconst resolvedCity = isValid ? raw : validated.location;\n\nreturn [{\n  json: {\n    location: validated.location,\n    codeType: validated.codeType,\n    city: resolvedCity,\n    geocode_succeeded: isValid\n  }\n}];\n"
+      },
+      "id": "e701d468-8ecd-4501-aefb-f374149eb504",
+      "name": "Parse City/State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "91052624-0a7e-4329-800b-f3d91d30f356",
+              "name": "prompt",
+              "value": "=Research the current {{ $json.codeType }} for this US jurisdiction:\n\n- Location entered: {{ $json.location }}\n- Resolved jurisdiction: {{ $json.city }}\n- Code type: {{ $json.codeType }}\n\nFollow the search strategy in your instructions and ground every claim in retrieved sources.",
+              "type": "string"
+            },
+            {
+              "id": "88218951-fb73-4227-8ddf-0219c4151617",
+              "name": "city",
+              "value": "={{ $json.city }}",
+              "type": "string"
+            },
+            {
+              "id": "88218951-fb73-4227-8ddf-0219c4151618",
+              "name": "codeType",
+              "value": "={{ $json.codeType }}",
+              "type": "string"
+            },
+            {
+              "id": "88218951-fb73-4227-8ddf-0219c4151619",
+              "name": "location",
+              "value": "={{ $json.location }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1440,
+        420
+      ],
+      "id": "895b9c22-8a2e-47e1-8c64-352bc176cbaf",
+      "name": "Build Agent Prompt"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an expert research assistant specializing in United States municipal and state building codes.\n\nOBJECTIVE\nFor a given US jurisdiction and code type, identify (1) the currently adopted code, (2) the adopting authority, (3) the corresponding state administrative code reference, and (4) any city-specific amendments. Return 3-6 official source documents.\n\nSEARCH STRATEGY\nYou have access to the `web_search` tool. Plan deliberate, targeted searches; do not make one broad query. Typical sequence:\n1. `<city> <state> <code type> adoption ordinance` - locate the city-level adoption.\n2. `<state> <code type> administrative code` - locate the state-level base code (e.g., WAC, CCR, NYCRR).\n3. `<city> <state> <code type> amendments` - locate local modifications.\nRun additional targeted searches only if the first three are insufficient. Stop after 5 searches even if uncertain.\n\nSOURCE QUALITY (in priority order)\n1. Official municipal websites and `.gov` / `.us` domains.\n2. Recognized code publishers: `codepublishing.com`, `municode.com`, `ecode360.com`, `iccsafe.org`.\n3. State agency PDFs hosted on the agency's own site.\nAvoid: blogs, contractor marketing pages, Wikipedia, and third-party summaries. (A downstream filter also drops non-allowed domains, but prefer to return clean sources to begin with.)\n\nGROUNDING RULES\n- Every URL in your output MUST come from a `web_search` tool result returned in this run. Never fabricate or guess URLs.\n- If the search results do not confirm a fact, set the relevant field to \"Not identified in search results\" rather than inferring.\n- If you cannot find authoritative sources after your planned searches, state that explicitly in `executive_summary` and return whatever partial findings you have.\n- The `source_type` field must be one of: `city`, `state`, `publisher`, `other`.\n\nOUTPUT\nReturn only the JSON object specified by the configured output schema. No markdown, no code fences, no prose outside the JSON.",
+          "maxIterations": 6,
+          "returnIntermediateSteps": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.9,
+      "position": [
+        1680,
+        420
+      ],
+      "id": "9825b6cf-a48c-4ae0-8dbe-6b2c89948e51",
+      "name": "Building Code Research Agent",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "GPT-4O"
+        },
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1560,
+        660
+      ],
+      "id": "b1b2c3d4-2222-3333-4444-555566667777",
+      "name": "OpenAI Chat Model (GPT-4o)",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Search the web via Google for current information on building codes, municipal regulations, and official government documents. Call this tool multiple times with different queries if needed to find both city-level adoption ordinances and state-level base codes. Returns ranked search results with titles, snippets, and URLs.",
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"{{ $fromAI('query', 'The search query string for finding building code information. Be specific and include the city, state, and code type.', 'string') }}\",\n  \"num\": 10\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        660
+      ],
+      "id": "34b752d2-fbf3-4536-bd43-7a236a762c17",
+      "name": "Web Search Tool (Serper)",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_SERPER_CREDENTIAL_ID",
+          "name": "Serper API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"executive_summary\": {\n      \"type\": \"string\",\n      \"description\": \"2-3 sentence overview of the current code status for this jurisdiction.\"\n    },\n    \"base_code\": {\n      \"type\": \"string\",\n      \"description\": \"The base code adopted, e.g. '2021 Uniform Plumbing Code'.\"\n    },\n    \"adopting_authority\": {\n      \"type\": \"string\",\n      \"description\": \"The body that adopted it, e.g. 'Washington State Building Code Council'.\"\n    },\n    \"state_code_reference\": {\n      \"type\": \"string\",\n      \"description\": \"State administrative code reference, e.g. 'Chapter 51-56 WAC'.\"\n    },\n    \"local_amendments\": {\n      \"type\": \"string\",\n      \"description\": \"Summary of city-specific amendments, or 'None found' if not located.\"\n    },\n    \"results\": {\n      \"type\": \"array\",\n      \"minItems\": 1,\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"title\": { \"type\": \"string\" },\n          \"link\": { \"type\": \"string\" },\n          \"snippet\": { \"type\": \"string\" },\n          \"source_type\": {\n            \"type\": \"string\",\n            \"enum\": [\"city\", \"state\", \"publisher\", \"other\"]\n          }\n        },\n        \"required\": [\"title\", \"link\", \"snippet\"]\n      }\n    }\n  },\n  \"required\": [\"executive_summary\", \"base_code\", \"adopting_authority\", \"local_amendments\", \"results\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        1860,
+        660
+      ],
+      "id": "c1c2c3c4-3333-4444-5555-666677778888",
+      "name": "Output Schema"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Cleans agent output before rendering:\n//   1. Unwraps `{ output, intermediateSteps }` shape produced when returnIntermediateSteps=true.\n//   2. Dedupes results by URL.\n//   3. Drops URLs whose host is not on the allowlist (.gov, .us, recognized publishers).\n//   4. Re-tags `source_type` for publisher domains (the model occasionally mis-tags these).\n//   5. Sorts city/state first, publishers next, other last; caps at 6.\n//\n// Output shape is unchanged downstream: `{ output: { executive_summary, base_code, ... results } }`,\n// so Format HTML Output keeps working without modification.\n\nconst raw = $input.first().json;\nconst ai = raw?.output ?? raw;\nconst intermediateSteps = raw?.intermediateSteps ?? null;\n\nconst PUBLISHER_DOMAINS = [\n  'codepublishing.com',\n  'municode.com',\n  'ecode360.com',\n  'iccsafe.org'\n];\n\nfunction hostOf(url) {\n  try { return new URL(url).hostname.toLowerCase(); }\n  catch { return ''; }\n}\n\nfunction isPublisher(host) {\n  return PUBLISHER_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n}\n\nfunction isAllowed(host) {\n  if (!host) return false;\n  if (host.endsWith('.gov') || host.endsWith('.us')) return true;\n  return isPublisher(host);\n}\n\nfunction retag(host, modelTag) {\n  if (isPublisher(host)) return 'publisher';\n  if (host.endsWith('.gov') || host.endsWith('.us')) {\n    // Trust the model's city/state distinction for gov domains; default to 'city' if missing.\n    return (modelTag === 'state' || modelTag === 'city') ? modelTag : 'city';\n  }\n  return 'other';\n}\n\nconst rawResults = Array.isArray(ai?.results) ? ai.results : [];\nconst seen = new Set();\nconst cleaned = [];\nlet dropped = 0;\n\nfor (const r of rawResults) {\n  const url = String(r?.link || '').trim();\n  if (!url) { dropped++; continue; }\n  if (seen.has(url)) { dropped++; continue; }\n  const host = hostOf(url);\n  if (!isAllowed(host)) { dropped++; continue; }\n  seen.add(url);\n  cleaned.push({\n    title: String(r?.title || 'Untitled'),\n    link: url,\n    snippet: String(r?.snippet || ''),\n    source_type: retag(host, r?.source_type)\n  });\n}\n\nconst order = { city: 1, state: 2, publisher: 3, other: 4 };\ncleaned.sort((a, b) => (order[a.source_type] || 9) - (order[b.source_type] || 9));\nconst final = cleaned.slice(0, 6);\n\nreturn [{\n  json: {\n    output: {\n      executive_summary: ai?.executive_summary || 'No summary available.',\n      base_code: ai?.base_code || 'Not identified',\n      adopting_authority: ai?.adopting_authority || 'Not identified',\n      state_code_reference: ai?.state_code_reference || 'Not specified',\n      local_amendments: ai?.local_amendments || 'None found',\n      results: final\n    },\n    filter_stats: {\n      input_count: rawResults.length,\n      kept: final.length,\n      dropped\n    },\n    intermediateSteps\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        420
+      ],
+      "id": "d1d2d3d4-4444-5555-6666-777788889999",
+      "name": "Dedup & Filter Sources"
+    },
+    {
+      "parameters": {
+        "jsCode": "const formData = $('User Input Form').item.json;\nconst location = formData['Location'];\nconst codeType = formData['Code Type'];\n\nconst raw = $input.first().json;\nconst ai = raw?.output ?? raw;\n\nconst escape = (s) => String(s ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\n\nconst safeUrl = (u) => {\n  const s = String(u ?? '').trim();\n  return /^https?:\\/\\//i.test(s) ? s : '#';\n};\n\nconst summary = escape(ai?.executive_summary || 'No summary available.');\nconst baseCode = escape(ai?.base_code || 'Not identified');\nconst authority = escape(ai?.adopting_authority || 'Not identified');\nconst stateRef = escape(ai?.state_code_reference || 'Not specified');\nconst amendments = escape(ai?.local_amendments || 'None found');\nconst results = Array.isArray(ai?.results) ? ai.results : [];\n\nlet html = `\n<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;line-height:1.55;color:#222;\">\n  <h2 style=\"color:#1a365d;margin-bottom:4px;\">${escape(codeType)} &mdash; ${escape(location)}</h2>\n\n  <h3 style=\"color:#2d3748;\">Executive Summary</h3>\n  <p>${summary}</p>\n\n  <h3 style=\"color:#2d3748;\">Key Adopted Code</h3>\n  <ul>\n    <li><strong>Base Code:</strong> ${baseCode}</li>\n    <li><strong>Adopting Authority:</strong> ${authority}</li>\n    <li><strong>State Reference:</strong> ${stateRef}</li>\n  </ul>\n\n  <h3 style=\"color:#2d3748;\">Local Amendments</h3>\n  <p>${amendments}</p>\n\n  <h3 style=\"color:#2d3748;\">Official Sources</h3>\n`;\n\nif (results.length === 0) {\n  html += `<p><em>No verified sources were returned for this query. Try a more specific location (e.g., add the state) and retry.</em></p>`;\n} else {\n  html += '<ol>';\n  for (const r of results) {\n    const title = escape(r?.title || 'Untitled source');\n    const link = safeUrl(r?.link);\n    const snippet = escape(r?.snippet || '');\n    const type = r?.source_type ? ` <span style=\\\"color:#718096;font-size:0.85em;\\\">[${escape(r.source_type)}]</span>` : '';\n    html += `<li style=\\\"margin-bottom:10px;\\\"><a href=\\\"${link}\\\" target=\\\"_blank\\\" rel=\\\"noopener noreferrer\\\">${title}</a>${type}<br><em style=\\\"color:#4a5568;\\\">${snippet}</em></li>`;\n  }\n  html += '</ol>';\n}\n\nhtml += `<hr style=\\\"margin-top:24px;border:none;border-top:1px solid #e2e8f0;\\\"><p style=\\\"color:#a0aec0;font-size:0.8em;\\\">Generated by AI research agent. Always verify against the official jurisdiction website before relying on this information for permitting or construction.</p></div>`;\n\nreturn [{\n  json: {\n    formatted: html,\n    raw_ai_output: ai,\n    filter_stats: raw?.filter_stats || null,\n    metadata: {\n      workflow: 'building-code-lookup',\n      version: '2.1.0',\n      generated_at: new Date().toISOString()\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        420
+      ],
+      "id": "cb5714e1-df18-48ed-ae90-de1443a2e764",
+      "name": "Format HTML Output"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Building Code Summary",
+        "completionMessage": "={{ $json.formatted }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        2340,
+        420
+      ],
+      "id": "093b581c-0781-4f54-9eb1-384380f2ede3",
+      "name": "Show Results to User",
+      "webhookId": "b6a0c163-536f-4e7b-804e-9beb4d37b17f"
+    }
+  ],
+  "pinData": {
+    "User Input Form": [
+      {
+        "json": {
+          "Location": "Renton WA",
+          "Code Type": "Fire Code",
+          "submittedAt": "2026-05-13T09:00:00.000-05:00",
+          "formMode": "test"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "User Input Form": {
+      "main": [
+        [
+          { "node": "Validate Input", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          { "node": "Resolve City & State", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Resolve City & State": {
+      "main": [
+        [
+          { "node": "Parse City/State", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse City/State": {
+      "main": [
+        [
+          { "node": "Build Agent Prompt", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Agent Prompt": {
+      "main": [
+        [
+          { "node": "Building Code Research Agent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "OpenAI Chat Model (GPT-4o)": {
+      "ai_languageModel": [
+        [
+          { "node": "Building Code Research Agent", "type": "ai_languageModel", "index": 0 }
+        ]
+      ]
+    },
+    "Web Search Tool (Serper)": {
+      "ai_tool": [
+        [
+          { "node": "Building Code Research Agent", "type": "ai_tool", "index": 0 }
+        ]
+      ]
+    },
+    "Output Schema": {
+      "ai_outputParser": [
+        [
+          { "node": "Building Code Research Agent", "type": "ai_outputParser", "index": 0 }
+        ]
+      ]
+    },
+    "Building Code Research Agent": {
+      "main": [
+        [
+          { "node": "Dedup & Filter Sources", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Dedup & Filter Sources": {
+      "main": [
+        [
+          { "node": "Format HTML Output", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Format HTML Output": {
+      "main": [
+        [
+          { "node": "Show Results to User", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": null,
+  "meta": {},
+  "tags": []
+}
