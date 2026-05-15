@@ -3,18 +3,18 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Building Code Finder (AI Agent + Web Search)\n\n**Flow**\n1. User submits Location + Code Type via n8n Form\n2. Input is validated (length, must contain a space OR digits, allowed code types)\n3. GPT-4o-mini resolves \"City, State\" from the raw location string; regex-checked before use\n4. The **AI Agent** (GPT-4o) plans research and calls the **Serper web_search tool** up to 5 times\n5. A **Structured Output Parser** enforces the JSON response schema\n6. **Dedup & Filter Sources** drops duplicate URLs and removes non-allowed domains\n7. Code node renders defensive HTML\n8. Form completion page displays results\n\n**Setup required before running**\n- OpenAI credential (already configured: `OpenAi account`)\n- Create an **HTTP Header Auth** credential named `Serper API`:\n  - Header name: `X-API-KEY`\n  - Header value: your Serper key\n- Open the `Web Search Tool (Serper)` node and select the new credential.\n\n**Robustness settings (this revision)**\n- Retries + timeouts on every network-bound node (OpenAI x2, Serper).\n- `returnIntermediateSteps: true` on the agent so tool-call traces flow downstream for debugging.\n- Domain allowlist + URL dedup enforced in code after the agent — prompt-only rules are not reliable on their own.\n\n**Why this architecture**\n- The Agent node supports OpenAI function calling — a plain completion node would leave the tool uninvoked.\n- The output parser guarantees the downstream nodes always receive the expected fields.\n- Geocoding is a cheap GPT-4o-mini call; the expensive GPT-4o agent only runs the research step.",
-        "height": 820,
+        "content": "## Building Code Finder (AI Agent + Web Search)\n\n**Flow**\n1. User submits Location + Code Type via n8n Form\n2. Input is validated (length, must contain a space OR digits, allowed code types)\n3. GPT-4o-mini resolves \"City, State\" from the raw location string; regex-checked before use\n4. The **AI Agent** (GPT-4o) plans research and calls the **Serper web_search tool** up to 5 times\n5. A **Structured Output Parser** enforces the JSON response schema\n6. **Dedup & Filter Sources** drops duplicate URLs and removes non-allowed domains\n7. Code node renders defensive HTML\n8. Form completion page displays results\n\n**Setup required before running**\n- OpenAI credential (already configured: `OpenAi account`)\n- Create an **HTTP Header Auth** credential named `Serper API`:\n  - Header name: `X-API-KEY`\n  - Header value: your Serper key\n- Open the `Web Search Tool (Serper)` node and select the new credential.\n\n**Robustness settings (this revision)**\n- Retries + timeouts on every network-bound node (OpenAI x2, Serper).\n- `returnIntermediateSteps: false` on the agent to keep execution payload small (no post-response lag).\n- Domain allowlist + URL dedup enforced in code after the agent — prompt-only rules are not reliable on their own.\n\n**Why this architecture**\n- The Agent node supports OpenAI function calling — a plain completion node would leave the tool uninvoked.\n- The output parser guarantees the downstream nodes always receive the expected fields.\n- Geocoding is a cheap GPT-4o-mini call; the expensive GPT-4o agent only runs the research step.",
+        "height": 980,
         "width": 380,
         "color": 5
       },
-      "id": "e68f5544-1c88-40ae-981e-88fe1f3fab39",
+      "id": "cd39a399-744a-4ab1-965e-5e77b8208527",
       "name": "Workflow Notes",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        160,
-        120
+        3104,
+        320
       ]
     },
     {
@@ -34,12 +34,24 @@
               "fieldType": "dropdown",
               "fieldOptions": {
                 "values": [
-                  { "option": "Building Code" },
-                  { "option": "Residential Code" },
-                  { "option": "Fire Code" },
-                  { "option": "Mechanical Code" },
-                  { "option": "Plumbing Code" },
-                  { "option": "Electrical Code" }
+                  {
+                    "option": "Building Code"
+                  },
+                  {
+                    "option": "Residential Code"
+                  },
+                  {
+                    "option": "Fire Code"
+                  },
+                  {
+                    "option": "Mechanical Code"
+                  },
+                  {
+                    "option": "Plumbing Code"
+                  },
+                  {
+                    "option": "Electrical Code"
+                  }
                 ]
               },
               "requiredField": true
@@ -47,15 +59,17 @@
           ]
         },
         "responseMode": "lastNode",
-        "options": {}
+        "options": {
+          "appendAttribution": false
+        }
       },
-      "id": "9f2ce9d2-35b5-4425-8c95-e3d5fbe05ae6",
+      "id": "49b86222-64f2-497e-be8e-855f6eda021c",
       "name": "User Input Form",
       "type": "n8n-nodes-base.formTrigger",
       "typeVersion": 2.1,
       "position": [
-        560,
-        420
+        3568,
+        624
       ],
       "webhookId": "building-code-finder"
     },
@@ -63,13 +77,13 @@
       "parameters": {
         "jsCode": "const form = $input.first().json;\n\nconst allowedCodeTypes = [\n  'Building Code',\n  'Residential Code',\n  'Fire Code',\n  'Mechanical Code',\n  'Plumbing Code',\n  'Electrical Code'\n];\n\nconst location = (form['Location'] || '').toString().trim();\nconst codeType = (form['Code Type'] || '').toString().trim();\n\nif (location.length < 3 || location.length > 200) {\n  throw new Error('Invalid location: must be 3-200 characters.');\n}\n\n// A useful US location has either a space (e.g., \"Renton WA\") or digits (ZIP or street number).\n// This rejects useless inputs like a bare state code (\"WA\") which would burn a GPT-4o agent run.\nconst hasSpace = /\\s/.test(location);\nconst hasDigits = /\\d/.test(location);\nif (!hasSpace && !hasDigits) {\n  throw new Error('Invalid location: please provide a city + state, ZIP code, or full address (e.g., \"Renton WA\", \"98168\").');\n}\n\nif (!allowedCodeTypes.includes(codeType)) {\n  throw new Error(`Invalid code type. Must be one of: ${allowedCodeTypes.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    location,\n    codeType,\n    geocode_prompt: `Identify the US city and state for the location \"${location}\". Respond with exactly \"City, Full State Name\" (e.g., \"Renton, Washington\"). If the location is ambiguous, not in the United States, or you cannot determine it, respond with exactly \"UNKNOWN\". Do not add explanations or any other text.`\n  }\n}];\n"
       },
-      "id": "a1b2c3d4-1111-2222-3333-444455556666",
+      "id": "1863bb20-4f1f-4248-b1df-f814878f37f9",
       "name": "Validate Input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        780,
-        420
+        3760,
+        624
       ]
     },
     {
@@ -83,8 +97,7 @@
         "messages": {
           "values": [
             {
-              "content": "={{ $json.geocode_prompt }}",
-              "role": "user"
+              "content": "={{ $json.geocode_prompt }}"
             }
           ]
         },
@@ -92,35 +105,35 @@
           "temperature": 0
         }
       },
-      "id": "f4bdef37-87ac-4fbe-af41-55c2e969abd5",
+      "id": "9756480c-9a4a-4c91-9107-3ce57dea6ce6",
       "name": "Resolve City & State",
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 1.8,
       "position": [
-        1000,
-        420
+        3936,
+        624
       ],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1500,
       "credentials": {
         "openAiApi": {
-          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
-          "name": "OpenAi account"
+          "id": "vqyuT7cErwUg10ar",
+          "name": "OpenAI account"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "const aiResponse = $input.first().json;\nconst validated = $('Validate Input').item.json;\n\nconst raw = (aiResponse?.message?.content || '').toString().trim();\n\n// Require the model to return exactly \"City, Full State\" (letters, spaces, dots, apostrophes, hyphens).\n// If the format is off, fall back to the raw location rather than passing malformed data to the agent.\nconst formatRegex = /^[A-Za-z .'\\-]+,\\s*[A-Za-z ]+$/;\nconst isValid = raw && raw.toUpperCase() !== 'UNKNOWN' && formatRegex.test(raw);\nconst resolvedCity = isValid ? raw : validated.location;\n\nreturn [{\n  json: {\n    location: validated.location,\n    codeType: validated.codeType,\n    city: resolvedCity,\n    geocode_succeeded: isValid\n  }\n}];\n"
+        "jsCode": "const aiResponse = $input.first().json;\nconst validated = $('Validate Input').first().json;\n\nconst raw = (aiResponse?.message?.content || '').toString().trim();\n\n// Require the model to return exactly \"City, Full State\" (letters, spaces, dots, apostrophes, hyphens).\n// If the format is off, fall back to the raw location rather than passing malformed data to the agent.\nconst formatRegex = /^[A-Za-z .'\\-]+,\\s*[A-Za-z ]+$/;\nconst isValid = raw && raw.toUpperCase() !== 'UNKNOWN' && formatRegex.test(raw);\nconst resolvedCity = isValid ? raw : validated.location;\n\nreturn [{\n  json: {\n    location: validated.location,\n    codeType: validated.codeType,\n    city: resolvedCity,\n    geocode_succeeded: isValid\n  }\n}];\n"
       },
-      "id": "e701d468-8ecd-4501-aefb-f374149eb504",
+      "id": "3621d155-a302-4f13-ae09-029db75e56db",
       "name": "Parse City/State",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1220,
-        420
+        4240,
+        624
       ]
     },
     {
@@ -158,10 +171,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1440,
-        420
+        4416,
+        624
       ],
-      "id": "895b9c22-8a2e-47e1-8c64-352bc176cbaf",
+      "id": "cb888112-642f-4a33-b39b-ae06784dcb1f",
       "name": "Build Agent Prompt"
     },
     {
@@ -172,16 +185,16 @@
         "options": {
           "systemMessage": "You are an expert research assistant specializing in United States municipal and state building codes.\n\nOBJECTIVE\nFor a given US jurisdiction and code type, identify (1) the currently adopted code, (2) the adopting authority, (3) the corresponding state administrative code reference, and (4) any city-specific amendments. Return 3-6 official source documents.\n\nSEARCH STRATEGY\nYou have access to the `web_search` tool. Plan deliberate, targeted searches; do not make one broad query. Typical sequence:\n1. `<city> <state> <code type> adoption ordinance` - locate the city-level adoption.\n2. `<state> <code type> administrative code` - locate the state-level base code (e.g., WAC, CCR, NYCRR).\n3. `<city> <state> <code type> amendments` - locate local modifications.\nRun additional targeted searches only if the first three are insufficient. Stop after 5 searches even if uncertain.\n\nSOURCE QUALITY (in priority order)\n1. Official municipal websites and `.gov` / `.us` domains.\n2. Recognized code publishers: `codepublishing.com`, `municode.com`, `ecode360.com`, `iccsafe.org`.\n3. State agency PDFs hosted on the agency's own site.\nAvoid: blogs, contractor marketing pages, Wikipedia, and third-party summaries. (A downstream filter also drops non-allowed domains, but prefer to return clean sources to begin with.)\n\nGROUNDING RULES\n- Every URL in your output MUST come from a `web_search` tool result returned in this run. Never fabricate or guess URLs.\n- If the search results do not confirm a fact, set the relevant field to \"Not identified in search results\" rather than inferring.\n- If you cannot find authoritative sources after your planned searches, state that explicitly in `executive_summary` and return whatever partial findings you have.\n- The `source_type` field must be one of: `city`, `state`, `publisher`, `other`.\n\nOUTPUT\nReturn only the JSON object specified by the configured output schema. No markdown, no code fences, no prose outside the JSON.",
           "maxIterations": 6,
-          "returnIntermediateSteps": true
+          "returnIntermediateSteps": false
         }
       },
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.9,
       "position": [
-        1680,
-        420
+        4608,
+        624
       ],
-      "id": "9825b6cf-a48c-4ae0-8dbe-6b2c89948e51",
+      "id": "4cf32ee3-06d6-42a0-93a0-1636d23682d5",
       "name": "Building Code Research Agent",
       "retryOnFail": true,
       "maxTries": 2,
@@ -202,18 +215,18 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.2,
       "position": [
-        1560,
-        660
+        4576,
+        864
       ],
-      "id": "b1b2c3d4-2222-3333-4444-555566667777",
+      "id": "43d29e9c-3ff6-48be-8ed5-e3b71d489d76",
       "name": "OpenAI Chat Model (GPT-4o)",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1500,
       "credentials": {
         "openAiApi": {
-          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
-          "name": "OpenAi account"
+          "id": "vqyuT7cErwUg10ar",
+          "name": "OpenAI account"
         }
       }
     },
@@ -243,17 +256,17 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.2,
       "position": [
-        1700,
-        660
+        4720,
+        864
       ],
-      "id": "34b752d2-fbf3-4536-bd43-7a236a762c17",
+      "id": "30839cc9-d96b-4f31-9dea-b875b21fe20e",
       "name": "Web Search Tool (Serper)",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1500,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "REPLACE_WITH_SERPER_CREDENTIAL_ID",
+          "id": "nl7UJPiN7KLV4PeB",
           "name": "Serper API"
         }
       }
@@ -266,36 +279,36 @@
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.2,
       "position": [
-        1860,
-        660
+        4880,
+        864
       ],
-      "id": "c1c2c3c4-3333-4444-5555-666677778888",
+      "id": "0613d2f7-dfea-455a-ba0c-18748fee3cb5",
       "name": "Output Schema"
     },
     {
       "parameters": {
-        "jsCode": "// Cleans agent output before rendering:\n//   1. Unwraps `{ output, intermediateSteps }` shape produced when returnIntermediateSteps=true.\n//   2. Dedupes results by URL.\n//   3. Drops URLs whose host is not on the allowlist (.gov, .us, recognized publishers).\n//   4. Re-tags `source_type` for publisher domains (the model occasionally mis-tags these).\n//   5. Sorts city/state first, publishers next, other last; caps at 6.\n//\n// Output shape is unchanged downstream: `{ output: { executive_summary, base_code, ... results } }`,\n// so Format HTML Output keeps working without modification.\n\nconst raw = $input.first().json;\nconst ai = raw?.output ?? raw;\nconst intermediateSteps = raw?.intermediateSteps ?? null;\n\nconst PUBLISHER_DOMAINS = [\n  'codepublishing.com',\n  'municode.com',\n  'ecode360.com',\n  'iccsafe.org'\n];\n\nfunction hostOf(url) {\n  try { return new URL(url).hostname.toLowerCase(); }\n  catch { return ''; }\n}\n\nfunction isPublisher(host) {\n  return PUBLISHER_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n}\n\nfunction isAllowed(host) {\n  if (!host) return false;\n  if (host.endsWith('.gov') || host.endsWith('.us')) return true;\n  return isPublisher(host);\n}\n\nfunction retag(host, modelTag) {\n  if (isPublisher(host)) return 'publisher';\n  if (host.endsWith('.gov') || host.endsWith('.us')) {\n    // Trust the model's city/state distinction for gov domains; default to 'city' if missing.\n    return (modelTag === 'state' || modelTag === 'city') ? modelTag : 'city';\n  }\n  return 'other';\n}\n\nconst rawResults = Array.isArray(ai?.results) ? ai.results : [];\nconst seen = new Set();\nconst cleaned = [];\nlet dropped = 0;\n\nfor (const r of rawResults) {\n  const url = String(r?.link || '').trim();\n  if (!url) { dropped++; continue; }\n  if (seen.has(url)) { dropped++; continue; }\n  const host = hostOf(url);\n  if (!isAllowed(host)) { dropped++; continue; }\n  seen.add(url);\n  cleaned.push({\n    title: String(r?.title || 'Untitled'),\n    link: url,\n    snippet: String(r?.snippet || ''),\n    source_type: retag(host, r?.source_type)\n  });\n}\n\nconst order = { city: 1, state: 2, publisher: 3, other: 4 };\ncleaned.sort((a, b) => (order[a.source_type] || 9) - (order[b.source_type] || 9));\nconst final = cleaned.slice(0, 6);\n\nreturn [{\n  json: {\n    output: {\n      executive_summary: ai?.executive_summary || 'No summary available.',\n      base_code: ai?.base_code || 'Not identified',\n      adopting_authority: ai?.adopting_authority || 'Not identified',\n      state_code_reference: ai?.state_code_reference || 'Not specified',\n      local_amendments: ai?.local_amendments || 'None found',\n      results: final\n    },\n    filter_stats: {\n      input_count: rawResults.length,\n      kept: final.length,\n      dropped\n    },\n    intermediateSteps\n  }\n}];\n"
+        "jsCode": "const raw = $input.first().json;\nconst ai = raw?.output ?? raw;\nconst intermediateSteps = raw?.intermediateSteps ?? null;\n\nconst PUBLISHER_DOMAINS = [\n  'codepublishing.com',\n  'municode.com',\n  'ecode360.com',\n  'iccsafe.org'\n];\n\nfunction hostOf(url) {\n  try { return new URL(url).hostname.toLowerCase(); }\n  catch { return ''; }\n}\n\nfunction isPublisher(host) {\n  return PUBLISHER_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n}\n\nfunction isAllowed(host) {\n  if (!host) return false;\n  if (host.endsWith('.gov') || host.endsWith('.us')) return true;\n  return isPublisher(host);\n}\n\nfunction retag(host, modelTag) {\n  if (isPublisher(host)) return 'publisher';\n  if (host.endsWith('.gov') || host.endsWith('.us')) {\n    return (modelTag === 'state' || modelTag === 'city') ? modelTag : 'city';\n  }\n  return 'other';\n}\n\nconst rawResults = Array.isArray(ai?.results) ? ai.results : [];\nconst seen = new Set();\nconst cleaned = [];\nconst all = [];  // track all unique URLs regardless of domain\nlet dropped = 0;\n\nfor (const r of rawResults) {\n  const url = String(r?.link || '').trim();\n  if (!url) { dropped++; continue; }\n  if (seen.has(url)) { dropped++; continue; }\n  const host = hostOf(url);\n  seen.add(url);\n  const entry = {\n    title: String(r?.title || 'Untitled'),\n    link: url,\n    snippet: String(r?.snippet || ''),\n    source_type: retag(host, r?.source_type)\n  };\n  all.push(entry);\n  if (isAllowed(host)) {\n    cleaned.push(entry);\n  } else {\n    dropped++;\n  }\n}\n\nconst order = { city: 1, state: 2, publisher: 3, other: 4 };\n\n// If the domain filter drops everything, fall back to all unique sources\n// so the user always sees something rather than \"No verified sources\".\nconst useFallback = cleaned.length === 0 && all.length > 0;\nconst pool = useFallback ? all : cleaned;\n\npool.sort((a, b) => (order[a.source_type] || 9) - (order[b.source_type] || 9));\nconst final = pool.slice(0, 6);\n\nreturn [{\n  json: {\n    output: {\n      executive_summary: ai?.executive_summary || 'No summary available.',\n      base_code: ai?.base_code || 'Not identified',\n      adopting_authority: ai?.adopting_authority || 'Not identified',\n      state_code_reference: ai?.state_code_reference || 'Not specified',\n      local_amendments: ai?.local_amendments || 'None found',\n      results: final\n    },\n    filter_stats: {\n      input_count: rawResults.length,\n      kept: final.length,\n      dropped: useFallback ? 0 : dropped,\n      used_fallback: useFallback\n    },\n    intermediateSteps\n  }\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1900,
-        420
+        4928,
+        624
       ],
-      "id": "d1d2d3d4-4444-5555-6666-777788889999",
+      "id": "96dbb96b-b359-47d1-b661-08763de35a26",
       "name": "Dedup & Filter Sources"
     },
     {
       "parameters": {
-        "jsCode": "const formData = $('User Input Form').item.json;\nconst location = formData['Location'];\nconst codeType = formData['Code Type'];\n\nconst raw = $input.first().json;\nconst ai = raw?.output ?? raw;\n\nconst escape = (s) => String(s ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\n\nconst safeUrl = (u) => {\n  const s = String(u ?? '').trim();\n  return /^https?:\\/\\//i.test(s) ? s : '#';\n};\n\nconst summary = escape(ai?.executive_summary || 'No summary available.');\nconst baseCode = escape(ai?.base_code || 'Not identified');\nconst authority = escape(ai?.adopting_authority || 'Not identified');\nconst stateRef = escape(ai?.state_code_reference || 'Not specified');\nconst amendments = escape(ai?.local_amendments || 'None found');\nconst results = Array.isArray(ai?.results) ? ai.results : [];\n\nlet html = `\n<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;line-height:1.55;color:#222;\">\n  <h2 style=\"color:#1a365d;margin-bottom:4px;\">${escape(codeType)} &mdash; ${escape(location)}</h2>\n\n  <h3 style=\"color:#2d3748;\">Executive Summary</h3>\n  <p>${summary}</p>\n\n  <h3 style=\"color:#2d3748;\">Key Adopted Code</h3>\n  <ul>\n    <li><strong>Base Code:</strong> ${baseCode}</li>\n    <li><strong>Adopting Authority:</strong> ${authority}</li>\n    <li><strong>State Reference:</strong> ${stateRef}</li>\n  </ul>\n\n  <h3 style=\"color:#2d3748;\">Local Amendments</h3>\n  <p>${amendments}</p>\n\n  <h3 style=\"color:#2d3748;\">Official Sources</h3>\n`;\n\nif (results.length === 0) {\n  html += `<p><em>No verified sources were returned for this query. Try a more specific location (e.g., add the state) and retry.</em></p>`;\n} else {\n  html += '<ol>';\n  for (const r of results) {\n    const title = escape(r?.title || 'Untitled source');\n    const link = safeUrl(r?.link);\n    const snippet = escape(r?.snippet || '');\n    const type = r?.source_type ? ` <span style=\\\"color:#718096;font-size:0.85em;\\\">[${escape(r.source_type)}]</span>` : '';\n    html += `<li style=\\\"margin-bottom:10px;\\\"><a href=\\\"${link}\\\" target=\\\"_blank\\\" rel=\\\"noopener noreferrer\\\">${title}</a>${type}<br><em style=\\\"color:#4a5568;\\\">${snippet}</em></li>`;\n  }\n  html += '</ol>';\n}\n\nhtml += `<hr style=\\\"margin-top:24px;border:none;border-top:1px solid #e2e8f0;\\\"><p style=\\\"color:#a0aec0;font-size:0.8em;\\\">Generated by AI research agent. Always verify against the official jurisdiction website before relying on this information for permitting or construction.</p></div>`;\n\nreturn [{\n  json: {\n    formatted: html,\n    raw_ai_output: ai,\n    filter_stats: raw?.filter_stats || null,\n    metadata: {\n      workflow: 'building-code-lookup',\n      version: '2.1.0',\n      generated_at: new Date().toISOString()\n    }\n  }\n}];\n"
+        "jsCode": "const formData = $('User Input Form').first().json;\nconst location = formData['Location'];\nconst codeType = formData['Code Type'];\nconst raw = $input.first().json;\nconst ai = raw?.output ?? raw;\n\nconst escape = (s) => String(s ?? '')\n  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n\nconst safeUrl = (u) => {\n  const s = String(u ?? '').trim();\n  return /^https?:\\/\\//i.test(s) ? s : '#';\n};\n\nconst summary    = escape(ai?.executive_summary || 'No summary available.');\nconst baseCode   = escape(ai?.base_code || 'Not identified');\nconst authority  = escape(ai?.adopting_authority || 'Not identified');\nconst stateRef   = escape(ai?.state_code_reference || 'Not specified');\nconst amendments = escape(ai?.local_amendments || 'None found');\nconst results    = Array.isArray(ai?.results) ? ai.results : [];\n\nlet sourcesHtml = '';\nif (results.length === 0) {\n  sourcesHtml = 'No verified sources were returned. Try a more specific location (e.g., add the state) and retry.';\n} else {\n  const items = results.map((r, i) => {\n    const title   = escape(r?.title || 'Untitled source');\n    const link    = safeUrl(r?.link);\n    const snippet = escape(r?.snippet || '');\n    const type    = escape(r?.source_type || 'other');\n    return '<li><strong><a href=\"' + link + '\" target=\"_blank\" rel=\"noopener noreferrer\">' + title + '</a></strong>'\n      + ' <em>[' + type + ']</em><br>' + snippet + '</li>';\n  });\n  sourcesHtml = '<ol>' + items.join('') + '</ol>';\n}\n\nconst html = ''\n  + '<a href=\"/form/building-code-finder\">&larr; New Search</a>'\n  + '<hr>'\n  + '<strong>' + escape(codeType) + ' &mdash; ' + escape(location) + '</strong><br><br>'\n  + summary\n  + '<hr>'\n  + '<strong>KEY ADOPTED CODE</strong><br><br>'\n  + '<table width=\"100%\" cellpadding=\"6\" cellspacing=\"0\">'\n  + '<tr><td align=\"right\" width=\"38%\"><strong>Base Code</strong></td><td align=\"left\">&nbsp;&nbsp;' + baseCode + '</td></tr>'\n  + '<tr><td align=\"right\"><strong>Adopting Authority</strong></td><td align=\"left\">&nbsp;&nbsp;' + authority + '</td></tr>'\n  + '<tr><td align=\"right\"><strong>State Reference</strong></td><td align=\"left\">&nbsp;&nbsp;' + stateRef + '</td></tr>'\n  + '</table>'\n  + '<hr>'\n  + '<strong>LOCAL AMENDMENTS</strong><br><br>'\n  + amendments\n  + '<hr>'\n  + '<strong>OFFICIAL SOURCES</strong><br>'\n  + sourcesHtml\n  + '<hr>'\n  + '<small>Generated by AI research agent. Always verify against the official jurisdiction website before relying on this information for permitting or construction decisions.</small>';\n\nreturn [{\n  json: {\n    formatted: html,\n    metadata: { workflow: 'building-code-lookup', version: '3.0.0', generated_at: new Date().toISOString() }\n  }\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2120,
-        420
+        5136,
+        624
       ],
-      "id": "cb5714e1-df18-48ed-ae90-de1443a2e764",
+      "id": "28a2c1b9-d94d-41cf-8e0e-eeb97f24c6f9",
       "name": "Format HTML Output"
     },
     {
@@ -308,10 +321,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 1,
       "position": [
-        2340,
-        420
+        5360,
+        624
       ],
-      "id": "093b581c-0781-4f54-9eb1-384380f2ede3",
+      "id": "c4816587-c245-490d-bd98-1493a90503df",
       "name": "Show Results to User",
       "webhookId": "b6a0c163-536f-4e7b-804e-9beb4d37b17f"
     }
@@ -332,86 +345,139 @@
     "User Input Form": {
       "main": [
         [
-          { "node": "Validate Input", "type": "main", "index": 0 }
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Validate Input": {
       "main": [
         [
-          { "node": "Resolve City & State", "type": "main", "index": 0 }
+          {
+            "node": "Resolve City & State",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Resolve City & State": {
       "main": [
         [
-          { "node": "Parse City/State", "type": "main", "index": 0 }
+          {
+            "node": "Parse City/State",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Parse City/State": {
       "main": [
         [
-          { "node": "Build Agent Prompt", "type": "main", "index": 0 }
+          {
+            "node": "Build Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Build Agent Prompt": {
       "main": [
         [
-          { "node": "Building Code Research Agent", "type": "main", "index": 0 }
+          {
+            "node": "Building Code Research Agent",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "OpenAI Chat Model (GPT-4o)": {
       "ai_languageModel": [
         [
-          { "node": "Building Code Research Agent", "type": "ai_languageModel", "index": 0 }
+          {
+            "node": "Building Code Research Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
         ]
       ]
     },
     "Web Search Tool (Serper)": {
       "ai_tool": [
         [
-          { "node": "Building Code Research Agent", "type": "ai_tool", "index": 0 }
+          {
+            "node": "Building Code Research Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
         ]
       ]
     },
     "Output Schema": {
       "ai_outputParser": [
         [
-          { "node": "Building Code Research Agent", "type": "ai_outputParser", "index": 0 }
+          {
+            "node": "Building Code Research Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
         ]
       ]
     },
     "Building Code Research Agent": {
       "main": [
         [
-          { "node": "Dedup & Filter Sources", "type": "main", "index": 0 }
+          {
+            "node": "Dedup & Filter Sources",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Dedup & Filter Sources": {
       "main": [
         [
-          { "node": "Format HTML Output", "type": "main", "index": 0 }
+          {
+            "node": "Format HTML Output",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Format HTML Output": {
       "main": [
         [
-          { "node": "Show Results to User", "type": "main", "index": 0 }
+          {
+            "node": "Show Results to User",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "8yo2bSYmpT4owr76",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
-  "versionId": null,
-  "meta": {},
+  "versionId": "c2d3ea08-92e6-447e-ba35-c623775cec3a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6dd75d0550aee1abec680ef9e64435c64ea6a1f391e308d16a61bfa3f203a64"
+  },
+  "id": "Dr2AaAUzzSLYsbXz",
   "tags": []
 }

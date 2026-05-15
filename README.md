@@ -9,7 +9,7 @@ The workflow uses an OpenAI function-calling agent (GPT-4o) with the Serper Goog
 
 ## How It Works
 1. **User Input Form** — n8n form trigger collects `Location` and `Code Type`.
-2. **Validate Input** — code node enforces length (2–200 chars) and allowed code-type values.
+2. **Validate Input** — code node enforces length (3–200 chars) and allowed code-type values.
 3. **Resolve City & State** — GPT-4o-mini (temperature 0) resolves the raw location into `City, Full State Name`, or returns `UNKNOWN`.
 4. **Parse City/State** — falls back to the raw location if resolution returns `UNKNOWN`.
 5. **Build Agent Prompt** — composes the research brief for the agent.
@@ -101,4 +101,4 @@ Open the form URL exposed by the **User Input Form** node (path: `building-code-
 
 ---
 
-© 2025 Greyfibre Developer Network | Prepared by Bilal Haider
+© 2026 Greyfibre Developer Network | Prepared by Bilal Haider

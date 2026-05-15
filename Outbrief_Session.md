@@ -74,7 +74,7 @@ The `Format HTML Output` node escapes `& < > "` and validates every URL against 
 - The agent can return "Not identified in search results" for fields it cannot ground — by design, to avoid hallucinated authorities or section references.
 - Hard cap at 5 searches means very obscure jurisdictions may yield partial results.
 - The result page is HTML on the form completion view only — no persistent storage of past lookups.
-- The current workflow does not retry on transient Serper failures; an upstream error surfaces as a workflow execution error.
+- Transient Serper failures are retried up to 3 times (1.5 s delay between attempts); persistent failures beyond that surface as a workflow execution error.
 
 ---
 
