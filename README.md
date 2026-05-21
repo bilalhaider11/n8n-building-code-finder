@@ -1,5 +1,7 @@
 # AI-Powered Building Code Lookup
 
+![Workflow](workflow.png)
+
 ## Overview
 An n8n workflow that takes a US location and a code type, then returns the currently adopted building code, the adopting authority, the state administrative-code reference, any local amendments, and 3–6 official sources.
 
